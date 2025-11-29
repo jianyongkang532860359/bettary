@@ -37,11 +37,13 @@ def compute_cycle_indicators(df_cycle: pd.DataFrame, cfg: IndicatorConfig) -> pd
     else:
         ind["P_resid_consistency"] = np.nan
         
-    # 2. Measurement Consistency (Meas vs Soft) -> Only for Calib
+    # 2. Measurement Consistency (Meas vs Soft)
     if not np.all(np.isnan(P_meas)) and len(P_soft) == len(P_meas):
         ind["P_resid_meas"] = np.sqrt(np.nanmean((P_meas - P_soft)**2))
     else:
         ind["P_resid_meas"] = np.nan
+
+    ind["has_P_meas"] = 1.0 if not np.all(np.isnan(P_meas)) else 0.0
 
     return pd.Series(ind)
 
@@ -53,11 +55,6 @@ def build_indicator_table(df_all, cfg):
         r["scenario"] = g["scenario"].iloc[0]
         r["is_anomaly"] = g["is_anomaly"].iloc[0]
         r["fault_type"] = g["fault_type"].iloc[0]
-        
-        # [NEW]: Explicit flag for sensor availability
-        # Helps IsolationForest distinguish Calib (has meas) vs Fleet (no meas)
-        r["has_P_meas"] = int(g["P_gas_kPa"].notna().any())
-        
         rows.append(r)
     return pd.DataFrame(rows)
 
@@ -70,40 +67,45 @@ class DiagnosticModel:
 
     def fit_unsupervised(self, df_ind):
         df_norm = df_ind[~df_ind["is_anomaly"]].copy()
-        if len(df_norm) < 5: 
+        if len(df_norm) < 3: 
             warnings.warn("Not enough normal samples. Diagnostics invalid.")
             self._valid = False
             return
         
-        self.feats = [c for c in df_norm.select_dtypes("number").columns 
-                      if c not in ["cycle_index", "is_anomaly"]]
+        # [V4.5 Fix]: Manually select physics-relevant features only.
+        # This reduces noise for small datasets compared to selecting all numeric columns.
+        target_feats = ["P_resid_consistency", "P_resid_meas", "eps_max"]
         
-        # Fill NaN (P_resid_meas is NaN for Fleet) with 0
-        X = df_norm[self.feats].fillna(0).values
+        # Only use features that actually exist in the dataframe
+        self.feats = [f for f in target_feats if f in df_norm.columns]
         
-        self.iso = IsolationForest(contamination=0.05, random_state=42)
+        if not self.feats:
+            warnings.warn("No valid diagnostic features found.")
+            self._valid = False
+            return
+
+        # Fill NaN with 0 (Crucial for P_resid_meas which is NaN for fleet cells)
+        X = df_norm[self.feats].fillna(0.0).values
+        
+        self.iso = IsolationForest(contamination=0.01, random_state=42)
         self.iso.fit(X)
         scores = -self.iso.decision_function(X)
         
-        s_std = np.std(scores)
-        if s_std < 1e-6:
-            self.th_warn = np.mean(scores) + 0.1
-        else:
-            self.th_warn = np.mean(scores) + 2*s_std
+        # [V4.5 Fix]: Use 90% quantile to be more sensitive to anomalies in small batches
+        self.th_warn = np.quantile(scores, 0.90) 
         self._valid = True
 
     def fit_supervised(self, df_ind):
         if not self._valid: return
         df_l = df_ind.dropna(subset=["is_anomaly"])
         if df_l.empty: return
-        X = df_l[self.feats].fillna(0).values
+        X = df_l[self.feats].fillna(0.0).values
         y = df_l["is_anomaly"].astype(int).values
         self.clf = RandomForestClassifier(class_weight='balanced', random_state=42)
         self.clf.fit(X, y)
 
     def score_cycle(self, row_ind):
         if not self._valid: return {"risk": "unknown"}
-        # Fix dtype warning
         x = row_ind.reindex(self.feats).astype(float).fillna(0.0).values.reshape(1, -1)
         s = -self.iso.decision_function(x)[0]
         risk = "alarm" if s > self.th_warn else "normal"
