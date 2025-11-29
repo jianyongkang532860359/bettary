@@ -9,11 +9,10 @@ from src.synthetic_data import NoiseConfig, SyntheticScenarioConfig, generate_sy
 from src.soft_sensor import ModelConfig, DataDrivenEstimator, split_by_group
 from src.diagnostics import IndicatorConfig, DiagnosticModel, build_indicator_table
 
-# [CONFIG] Output Directory
 OUTPUT_DIR = "outputs"
 
 def main():
-    print("=== [V4.3 Final Polished] Pipeline Start ===")
+    print("=== [V4.3.3 Final Rigor] Pipeline Start ===")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     # 1. Config
@@ -46,7 +45,6 @@ def main():
     mech_model = MechanicalPressureModel('cubic', alpha_thermal=23e-6)
     mech_model.fit(df_calib_norm) 
     
-    # Predict on All -> 'P_gas_mech_est'
     df_mech = mech_model.predict(df_all, out_col="P_gas_mech_est")
     df_all["P_gas_mech_est"] = df_mech["P_gas_mech_est"]
     
@@ -54,23 +52,22 @@ def main():
     print(">>> D3: Soft Sensor Training...")
     est = DataDrivenEstimator(ModelConfig(target_cols=['P_gas_phys_kPa']))
     
-    # Split Calib into Train/Test for quantitative evaluation
-    df_calib_train, df_calib_test = split_by_group(df_calib_norm, group_col="scenario", test_ratio=0.3, seed=42)
+    # [Fix]: shuffle=False for reproducibility in papers
+    df_calib_train, df_calib_test = split_by_group(
+        df_calib_norm, group_col="scenario", test_ratio=0.3, seed=42, shuffle=False
+    )
     
     est.fit(df_calib_train) 
     
-    # Evaluate & Save Metrics
     metrics = est.evaluate(df_calib_test)
     print(f"    [Eval] Soft Sensor Metrics: {metrics}")
     
-    # [Robustness Check]
     r2_val = metrics.get('P_gas_phys_kPa_R2', 0)
     if r2_val < 0.9:
         print(f"    [WARN] Soft Sensor R2 ({r2_val:.3f}) < 0.9. Check features or params.")
     
     pd.DataFrame([metrics]).to_csv(os.path.join(OUTPUT_DIR, "soft_sensor_metrics.csv"), index=False)
     
-    # Predict on All -> 'P_gas_soft_est'
     df_soft = est.predict(df_all)
     df_all["P_gas_soft_est"] = df_soft["P_gas_phys_kPa_pred"]
     
@@ -81,7 +78,6 @@ def main():
     diag = DiagnosticModel()
     diag.fit_unsupervised(df_ind)
     
-    # Manual loop for scoring (simple enough for demo scale)
     scores = []
     risks = []
     for _, row in df_ind.iterrows():
@@ -94,19 +90,14 @@ def main():
     
     # 7. Visualization
     print(">>> Plotting...")
-    
-    # Case 1: Overpressure
     plot_comparison(df_all, "fleet_fault_op", os.path.join(OUTPUT_DIR, "plot_fault_overpressure.png"),
                     "True Overpressure: Mech Est follows True P, Soft Est underestimates the rise.")
     
-    # Case 2: Sensor Fault
     plot_comparison(df_all, "calib_fault_sensor", os.path.join(OUTPUT_DIR, "plot_fault_sensor.png"),
                     "Sensor Drift: Only Meas P deviates. True P, Mech & Soft Est consistent.")
     
-    # Risk Bar
     plt.figure(figsize=(10, 5))
     colors = ['r' if r == 'alarm' else 'b' for r in df_ind['pred_risk']]
-    
     plt.bar(df_ind['scenario'], df_ind['score'], color=colors)
     plt.xticks(rotation=45, ha='right')
     plt.ylabel("Anomaly Score (IF)")
@@ -118,8 +109,7 @@ def main():
 
 def plot_comparison(df, scen_name, path, note=""):
     d = df[df['scenario'] == scen_name]
-    # [Improvement] Use physical time 't_s' as x-axis
-    t = d.index # Since index is set to t_s in synthetic_data
+    t = d.index 
     
     plt.figure(figsize=(10,6))
     plt.plot(t, d['P_gas_phys_kPa'], 'k-', lw=2, label='True P')
