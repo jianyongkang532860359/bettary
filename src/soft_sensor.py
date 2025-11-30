@@ -88,8 +88,12 @@ class DataDrivenEstimator:
     def _feature_engineering(self, df: pd.DataFrame) -> pd.DataFrame:
         keys = [k for k in ['cell_id', 'cycle_index'] if k in df.columns]
         if keys: 
-            # groupby apply 可能会导致索引层级问题，reset_index 处理
-            X = df.groupby(keys, group_keys=False).apply(self._feat_eng_group_logic)
+            # [Fix V5.1]: Explicitly set include_groups=False for Pandas 2.2+ compatibility
+            try:
+                X = df.groupby(keys, group_keys=False).apply(self._feat_eng_group_logic, include_groups=False)
+            except TypeError:
+                # Fallback for older Pandas versions that don't support include_groups
+                X = df.groupby(keys, group_keys=False).apply(self._feat_eng_group_logic)
         else: 
             X = self._feat_eng_group_logic(df)
         
@@ -98,7 +102,6 @@ class DataDrivenEstimator:
         X = X.interpolate(method='linear', limit_direction='both')
         
         # 2. 均值填充处理首尾缺失 (避免0值物理谬误)
-        # 注意: 需按列填充
         if X.isnull().values.any():
             X = X.fillna(X.mean())
             # 3. 兜底: 如果整列都是NaN (mean也是NaN), 只能填0
