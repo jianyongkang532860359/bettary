@@ -1,9 +1,10 @@
+
 -----
 
 ````markdown
 # Lithium Battery State Estimation & Diagnostics Framework
 
-> **A Physics-Data Hybrid Twin Approach (V12.0 Final Paper Version)**
+> **A Physics-Data Hybrid Twin Approach (V13.0 Ultimate Refactoring)**
 >
 > 基于“机理+数据”融合驱动的锂电池数字孪生、故障诊断与 SOX 估算系统
 
@@ -15,10 +16,10 @@
 
 **核心能力：**
 
-* **多维状态反演**：基于混合训练策略 (Hybrid Training) 的软传感器，同时精准反演**内部气压 ($P_{gas}$)** 与 **核心温度 ($T_{core}$)**。
-* **物理/传感故障解耦**：利用物理残差与测量残差的正交特性，有效区分 **真实物理故障 (Cold Swelling)** 与 **传感器漂移 (Sensor Drift)**。
-* **高鲁棒 SOX 估算**：实现了安时积分 SOC 与 **基于 RLS 的自适应 SOH 估算**，在老化工况下通过物理闭环实现容量真值收敛。
-* **量化安全评估**：引入 **归一化严重度 (Normalized Severity)** 指标，替代玄学的 AI 打分，提供可解释的工程报警策略。
+* **多维状态反演**：基于 **混合训练策略 (Hybrid Training)** 的软传感器，解决了 AI 模型在动态工况下的泛化问题，精准反演**内部气压 ($P_{gas}$)** 与 **核心温度 ($T_{core}$)**。
+* **物理/传感故障解耦**：利用物理残差 ($P_{mech}-P_{soft}$) 与测量残差 ($P_{meas}-P_{soft}$) 的正交特性，有效区分 **真实物理故障 (Cold Swelling)** 与 **传感器漂移 (Sensor Drift)**。
+* **高鲁棒 SOX 估算**：内置安时积分 SOC 与 **基于 RLS 的自适应 SOH 估算**，在物理闭环仿真中实现了容量从 100% 向 90% 真值的精准收敛。
+* **量化安全评估**：引入 **归一化严重度 (Normalized Severity)** 指标与 **鲁棒阈值标定 (Median+MAD)**，提供红/橙/蓝分级预警，消除虚警。
 
 -----
 
@@ -31,9 +32,9 @@
 | **D0** | `data_schema.py` | **数据底座** | 统一数据语义，严格隔离物理真值 (True)、测量值 (Meas) 与估计值 (Est)。 |
 | **D1** | `thermal_model_rc.py` | **热观测器** | 基于 3-Node RC 热网络，提供热力学基础状态。 |
 | **D2** | `mech_strain_pressure.py` | **力学观测器** | 建立壳体应变-压力的非线性本构方程，作为物理一致性基准。 |
-| **D3** | `soft_sensor.py` | **AI 软测量** | **[升级]** 多目标 XGBoost 模型。采用“标定+车队”混合训练策略，解决 OOD (分布偏移) 问题，实现 $P/T$ 双参精准预测。 |
-| **D4** | `diagnostics.py` | **诊断核心** | **[升级]** 显式规则诊断。基于统计学 (Median+MAD) 自动标定阈值，计算归一化严重度，实现红/橙/蓝分级预警。 |
-| **SOX**| `main_pipeline.py` | **状态估算** | **[新增]** 内置 `SOCEstimator` (Ah积分) 与 `SOHEstimator` (递归最小二乘)，实现容量动态跟随。 |
+| **D3** | `soft_sensor.py` | **AI 软测量** | **[V13升级]** 采用“标定+车队(正常)”混合训练，并引入去偏 (De-biasing) 与平滑逻辑，确保 $T_{core}$ 预测的物理真实性。 |
+| **D4** | `diagnostics.py` | **诊断核心** | **[V13升级]** 基于 Median+MAD 的鲁棒统计标定，计算归一化严重度，实现红(物理)/橙(传感)/蓝(正常) 分级诊断。 |
+| **SOX**| `main_pipeline.py` | **状态估算** | **[V13升级]** 内置 SOC/SOH 估算器。SOH 采用物理闭环验证，展示了容量衰减的实时跟踪能力。 |
 | **Data** | `synthetic_data.py` | **数字孪生** | 生成包含正常、冷鼓胀、传感器漂移及**加速老化**的全场景合成数据。 |
 
 -----
@@ -46,7 +47,7 @@
 pip install -r requirements.txt
 ````
 
-### 3.2 运行全链路仿真 (V12.0 Pipeline)
+### 3.2 运行全链路仿真 (V13.0 Pipeline)
 
 该脚本将执行数据生成、模型训练 (D2/D3)、SOX 估算、诊断逻辑 (D4) 及论文绘图：
 
@@ -71,16 +72,16 @@ python main_pipeline.py
 
 ### 4.2 寿命状态估算 (`plot_sox_estimation.png`)
 
-  * **SOC**: 在老化造成的容量衰减场景下，展示了估算值与真值的动态关系。
-  * **SOH Convergence**: 蓝线 (Est SOH) 从初始 100% 快速**收敛至真值 90%**。
+  * **SOC**: 展示了容量衰减导致的 SOC 估算偏差。
+  * **SOH Convergence**: 蓝线 (Est SOH) 从初始 100% 快速、平滑地**收敛至真值 90%**。
       * 验证了算法对 $dQ/dSOC$ 变化的敏感性及物理约束的有效性。
 
-### 4.3 车队健康概览 (`risk_score_fleet.png`)
+### 4.3 车队健康概览 (`risk_score_*.png`)
 
-  * **归一化严重度 (Severity)**:
-      * 正常车辆 (Normal Fleet)：Severity $\approx 0$，远低于安全线 (1.0)。
-      * 故障车辆 (Fault Fleet)：Severity $\gg 1.0$，红色警报显著。
-  * **意义**：展示了算法在真实车队运营数据中的极低误报率和高检出率。
+  * **Fleet View (`risk_score_fleet.png`)**:
+      * 仅展示运营车辆。正常车 (Severity $\approx 0$) 与故障车 (Severity $\gg 1$) 区分度极高。
+  * **Validation View (`risk_score_full.png`)**:
+      * 展示全量数据（含标定与老化测试），用于验证算法在边缘工况下的鲁棒性。
 
 ### 4.4 诊断原理图 (`plot_metrics_scatter.png`)
 
@@ -90,11 +91,11 @@ python main_pipeline.py
 
 ## 5\. 版本演进 (Version History)
 
-### [v12.0] - Final Paper Version (Current)
+### [v13.0] - Ultimate Refactoring (Current)
 
   * **SOH Physics Loop**: 重构了老化数据的物理闭环生成逻辑，确保 SOH 算法在数学上可观测、可收敛。
-  * **Robust Soft Sensor**: 引入混合训练集 (Hybrid Training)，彻底解决了 AI 模型在动态工况下对核心温度 ($T_{core}$) 预测失真的问题。
-  * **Engineering Polish**: 完善了图表可视化逻辑，增加了安全阈值参考线，剔除了干扰数据。
+  * **Robust Soft Sensor**: 引入混合训练集 (Hybrid Training) 与去偏平滑后处理，彻底解决了 AI 模型在动态工况下对核心温度 ($T_{core}$) 预测失真的问题。
+  * **Statistical Thresholds**: 采用 Median+MAD 替代 Mean+Std 进行阈值标定，提升了对离群点的鲁棒性。
 
 ### [v9.0 - v11.0] - Engineering Refactoring
 
