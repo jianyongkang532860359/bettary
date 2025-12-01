@@ -1,7 +1,5 @@
 
 
------
-
 ````markdown
 # Lithium Battery State Estimation & Diagnostics Framework
 
@@ -14,7 +12,7 @@
 
 本项目构建了一套**车规级**的锂电池全生命周期健康监测算法框架。针对电池**“内部状态不可测”**与**“老化状态难估计”**的行业痛点，本系统采用了 **物理模型 (Physics-based)** 与 **数据驱动 (Data-driven)** 深度融合的策略。
 
-在仅依赖外部易测信号（$V, I, T_{surf}, \epsilon_{case}$）的前提下，系统实现了从**毫秒级故障诊断**到**长周期寿命预测**的全栈能力，并提供了**离线训练**与**在线推理 (Real-time Inference)** 两套完整架构。
+在仅依赖外部易测信号（$V, I, T_{surf}, \epsilon_{case}$）的前提下，系统实现了从**毫秒级故障诊断**到**长周期寿命预测**的全栈能力。
 
 **核心能力：**
 
@@ -26,27 +24,32 @@
 
 -----
 
-## 2. 技术架构 (System Architecture)
+## 2. 代码结构与功能说明 (File Structure & Functions)
 
-系统采用模块化分层设计，核心算法位于 `src/` 目录：
+本项目分为 **主程序 (Applications)** 与 **核心算法库 (Core Library / src)** 两大部分。
 
-### 2.1 核心算法库 (Core Library)
+### 2.1 主程序 (Applications)
 
-| 层级 | 模块文件 | 功能定义 | 核心技术 |
-| :--- | :--- | :--- | :--- |
-| **D0** | `data_schema.py` | **数据底座** | 统一数据语义，严格隔离物理真值 (True)、测量值 (Meas) 与估计值 (Est)。 |
-| **D1** | `thermal_model_rc.py` | **热观测器** | 基于 3-Node RC 热网络，提供热力学基础状态。 |
-| **D2** | `mech_strain_pressure.py` | **力学观测器** | 建立壳体应变-压力的非线性本构方程，作为物理一致性基准。 |
-| **D3** | `soft_sensor.py` | **AI 软测量** | **[离线训练]** 采用“标定+车队”混合训练的多目标 XGBoost 模型，解决 OOD 问题。 |
-| **D4** | `diagnostics.py` | **诊断工具** | **[离线分析]** 基于 Median+MAD 的鲁棒统计标定与严重度计算工具。 |
-| **RT** | `online_engine.py` | **在线引擎** | **[MCU 原型]** 轻量级推理引擎。脱离 Pandas 依赖，支持 `step(sample)` 逐点调用，易于移植 C 代码。 |
-
-### 2.2 应用程序 (Applications)
-
-| 文件 | 用途 | 说明 |
+| 文件名 | 功能定义 | 核心作用 |
 | :--- | :--- | :--- |
-| `main_pipeline.py` | **离线全链路仿真** | 执行数据生成、模型训练、参数标定及论文级图表绘制。 |
-| `realtime_monitor.py` | **实时 HIL 上位机** | **[演示工具]** 模拟传感器数据流，调用 `OnlineBMSEngine`，提供动态黑客风仪表盘。 |
+| **`main_pipeline.py`** | **离线全链路仿真主程序** | 系统的“大脑”与“工厂”。负责生成合成数据、训练 D2/D3 模型、执行 SOH 物理闭环验证、自动标定诊断阈值，并生成所有论文级分析图表 (`outputs/`)。 |
+| **`realtime_monitor.py`** | **实时 HIL 仿真上位机** | 系统的“仪表盘”。模拟传感器数据流，实时调用在线引擎，动态展示压力、温度、SOC/SOH 曲线及故障严重度报警。 |
+| `analyze_metrics.py` | 离线指标分析工具 | (可选) 专门用于批量计算和导出诊断指标统计表 (`diagnosis_indicators_table.csv`)。 |
+| `plot_2d_scatter.py` | 散点图绘制工具 | (可选) 专门用于绘制高精度的故障解耦二维散点图。 |
+
+### 2.2 核心算法库 (src/)
+
+| 模块文件 | 角色 | 功能详解 |
+| :--- | :--- | :--- |
+| **`online_engine.py`** | **RT 在线引擎** | **[核心交付物]** BMS 实时推理内核。封装了 SOC/SOH 估算、软传感器推理及诊断逻辑。**特点：** 去除了 Pandas 依赖，支持 `step(sample)` 逐点计算，代码结构可直接对标嵌入式 C 代码。 |
+| **`mech_strain_pressure.py`** | **D2 力学模型** | **物理观测器**。定义了壳体应变 ($\epsilon$) 与内部气压 ($P$) 的非线性本构方程，包含热膨胀补偿逻辑。提供 `fit` (参数辨识) 和 `predict` 接口。 |
+| **`soft_sensor.py`** | **D3 软传感器** | **AI 观测器**。基于 XGBoost 的数据驱动模型。包含特征工程（滑动窗口、微分）逻辑，负责从 $V, I, T$ 反演内部 $P$ 和 $T_{core}$。 |
+| **`thermal_model_rc.py`** | **D1 热模型** | **热力学基准**。基于 3-Node RC 网络的热模型，用于生成仿真数据中的核心温度真值，提供物理参考。 |
+| **`diagnostics.py`** | **D4 诊断工具** | **特征提取库**。负责计算各类残差指标（一致性残差、测量残差）及特征聚合，为上层诊断逻辑提供数据基础。 |
+| **`synthetic_data.py`** | **数据工厂** | **数字孪生生成器**。生成包含正常循环、冷鼓胀 (Overpressure)、传感器漂移 (Sensor Drift) 及加速老化 (Aging) 的高保真合成数据。 |
+| `data_loader.py` | 数据适配器 | 负责读取外部 CSV/Excel 实验数据，进行列名映射、单位换算及时间轴对齐。 |
+| `preprocessing.py` | 信号预处理 | 提供低通滤波 (Low-pass Filter) 和去噪功能，提升输入数据质量。 |
+| `data_schema.py` | 数据字典 | 定义系统的标准字段命名（如 `I_A`, `V_V`）与物理单位，确保全链路数据语义一致。 |
 
 -----
 
@@ -113,39 +116,6 @@ python realtime_monitor.py
 ### [v9.0 - v11.0] - Engineering Refactoring
 
   * **Severity Metric**: 引入归一化严重度指标与鲁棒阈值标定。
-
------
-
-## 6\. 实机部署路线图 (MCU Porting Guide)
-
-**`src/online_engine.py` 已按照嵌入式逻辑设计，下一步只需进行语法转译即可上车。**
-
-### 6.1 核心算法 C 化 (Core Algorithm Porting)
-
-  * **目标**：将 `OnlineBMSEngine` 类转换为 `bms_core.c`。
-  * **步骤**：
-    1.  **数据结构**：定义 `BMS_Input_t` (电压、电流等) 和 `BMS_Output_t` (SOC、SOH、报警位)。
-    2.  **去对象化**：将 Python 类方法 `step()` 转换为 C 函数 `BMS_Step(const BMS_Input_t* in, BMS_Output_t* out)`。
-    3.  **移除库依赖**：使用手写 Ring Buffer 替代 `collections.deque`，使用 `math.h` 替代 `numpy`。
-
-### 6.2 AI 模型轻量化 (Model Distillation)
-
-  * **挑战**：MCU 无法直接运行 XGBoost 库。
-  * **方案**：
-      * **方法 A (Treelite)**: 使用 Treelite 将 XGBoost 模型编译为无依赖的 C 代码（if-else 森林）。
-      * **方法 B (查表法)**: 将软传感器离散化为 3D LUT (Look-Up Table)，输入 V/I/T，查表得到 P/T\_core。
-
-### 6.3 参数配置固化 (Configuration Freezing)
-
-  * **现状**：参数分散在 Python 变量中。
-  * **目标**：生成 `bms_config.h`。
-  * **实现**：编写脚本将离线标定的阈值、多项式系数自动生成为 C 头文件宏定义：
-    ```c
-    // bms_config.h (Auto-generated)
-    #define TH_PHYS_KPA  12.5f
-    #define SOH_LEARN_RATE 0.2f
-    static const float MECH_PARAMS[3] = {0.5f, 0.01f, 100.0f}; // k1, k3, p0
-    ```
 
 -----
 
